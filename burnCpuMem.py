@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 # coding: utf-8
 from multiprocessing import Process
+import multiprocessing
 import time
 import subprocess
 import argparse
@@ -30,59 +31,62 @@ def exit_child(x,y):
   sleep.set()
 signal.signal(signal.SIGINT, exit_child)
 
-
-
-def getCpuUse():
+def getCpuUse(x,result_queue):
     p = subprocess.Popen("vmstat 1 3 | awk 'END {print (100-$(NF-2))}'", shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     result = int(p.stdout.readlines().__getitem__(0))
-    return result
+    result_queue.put(result)
 
-def getMemUse():
+def getMemUse(x,result_queue):
     p = subprocess.Popen("awk '/MemTotal/{total=$2}/MemFree/{free=$2}END{print (total-free)/total*100}' /proc/meminfo", shell=True,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     result = int(float(p.stdout.readlines().__getitem__(0)))
-    return int(result)
+    result_queue.put(result)
     
 def task_cpu(x):
     while True:
         x*x
 
-
 if __name__ == '__main__':
+    multiprocessing.set_start_method('forkserver') #python3特性，支持子进程和父进程分离，不会复制父进程的内存资源
+    result_queue = multiprocessing.Queue()
+    #multiprocessing.set_start_method('spawn')
     start_time = time.time()
     minCpus = args.minCpus
     maxCpus = args.maxCpus
     rams = args.rams
     currProcList = []
     ramblock = []
-    if rams != 0:
-      file = open('/home/ddoms/memdemo.log', mode='w')
-    else:
-      file = open('/home/ddoms/cpudemo.log', mode='w')
+    file = open('/home/ddoms/cpudemo.log.' + str(os.getpid()), mode='w')
     while True:
-        print time.time() - start_time
         if time.time() - start_time >= args.time:
           if currProcList.__len__() != 0:
             for p in currProcList:
               p.terminate()
           break
-        curCpus = getCpuUse()
-        curMem = getMemUse()
+        p = multiprocessing.Process(target=getMemUse, args=(1,result_queue))
+        p.start()
+        p.join()
+        result = result_queue.get()
+        curMem = result
+        p1 = multiprocessing.Process(target=getCpuUse, args=(1,result_queue))
+        p1.start()
+        p1.join()
+        result1 = result_queue.get()
+        curCpus =result1
         n_time = datetime.datetime.now()
         file.write('%s CPU is: %s%% ,MEM is: %s%%, task: %s, mem_test: %sGB \n' % (n_time,curCpus,curMem,currProcList.__len__(),len(ramblock) ))
         file.flush()
-        if rams != 0:
-          if curMem <= rams :
+        if rams != 0 and curMem <= rams :
               print("Allocating 1GB of RAM" )
               ramblock.append('x' * 1048576*1024)
-          elif curMem > rams and (curMem- rams) > 1:
+        elif rams != 0 and curMem > rams and (curMem - rams) >= 4 :
               ramblock = ramblock[:-1]
-        elif curCpus <= minCpus:
+        elif rams ==0 and curCpus <= minCpus:
             p = Process(target=task_cpu, args=(1,))
             currProcList.append(p)
             p.start()
-        elif curCpus >= maxCpus:
+        elif rams ==0 and curCpus >= maxCpus:
             if currProcList.__len__() != 0:
                 p = currProcList.__getitem__(0)
                 p.terminate()
